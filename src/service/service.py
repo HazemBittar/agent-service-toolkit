@@ -1,11 +1,10 @@
 import json
 import logging
-import os
 import warnings
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -18,6 +17,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langsmith import Client as LangsmithClient
 
 from agents import DEFAULT_AGENT, agents
+from core import settings
 from schema import (
     ChatHistory,
     ChatHistoryInput,
@@ -39,15 +39,15 @@ logger = logging.getLogger(__name__)
 
 def verify_bearer(
     http_auth: Annotated[
-        HTTPAuthorizationCredentials,
-        Depends(HTTPBearer(description="Please provide AUTH_SECRET api key.")),
+        HTTPAuthorizationCredentials | None,
+        Depends(HTTPBearer(description="Please provide AUTH_SECRET api key.", auto_error=False)),
     ],
 ) -> None:
-    if http_auth.credentials != os.getenv("AUTH_SECRET"):
+    if not settings.AUTH_SECRET:
+        return
+    auth_secret = settings.AUTH_SECRET.get_secret_value()
+    if not http_auth or http_auth.credentials != auth_secret:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
-
-
-bearer_depend = [Depends(verify_bearer)] if os.getenv("AUTH_SECRET") else None
 
 
 @asynccontextmanager
@@ -62,10 +62,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 app = FastAPI(lifespan=lifespan)
-router = APIRouter(dependencies=bearer_depend)
+router = APIRouter(dependencies=[Depends(verify_bearer)])
 
 
-def _parse_input(user_input: UserInput) -> tuple[dict[str, Any], str]:
+def _parse_input(user_input: UserInput) -> tuple[dict[str, Any], UUID]:
     run_id = uuid4()
     thread_id = user_input.thread_id or str(uuid4())
     kwargs = {
