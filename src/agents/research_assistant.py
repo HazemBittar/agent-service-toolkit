@@ -1,19 +1,19 @@
-import os
 from datetime import datetime
 from typing import Literal
 
 from langchain_community.tools import DuckDuckGoSearchResults, OpenWeatherMapQueryRun
+from langchain_community.utilities import OpenWeatherMapAPIWrapper
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda, RunnableSerializable
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, MessagesState, StateGraph
-from langgraph.managed import IsLastStep
+from langgraph.managed import RemainingSteps
 from langgraph.prebuilt import ToolNode
 
 from agents.llama_guard import LlamaGuard, LlamaGuardOutput, SafetyAssessment
-from agents.models import models
 from agents.tools import calculator
+from core import get_model, settings
 
 
 class AgentState(MessagesState, total=False):
@@ -23,7 +23,7 @@ class AgentState(MessagesState, total=False):
     """
 
     safety: LlamaGuardOutput
-    is_last_step: IsLastStep
+    remaining_steps: RemainingSteps
 
 
 web_search = DuckDuckGoSearchResults(name="WebSearch")
@@ -31,8 +31,11 @@ tools = [web_search, calculator]
 
 # Add weather tool if API key is set
 # Register for an API key at https://openweathermap.org/api/
-if os.getenv("OPENWEATHERMAP_API_KEY") is not None:
-    tools.append(OpenWeatherMapQueryRun(name="Weather"))
+if settings.OPENWEATHERMAP_API_KEY:
+    wrapper = OpenWeatherMapAPIWrapper(
+        openweathermap_api_key=settings.OPENWEATHERMAP_API_KEY.get_secret_value()
+    )
+    tools.append(OpenWeatherMapQueryRun(name="Weather", api_wrapper=wrapper))
 
 current_date = datetime.now().strftime("%B %d, %Y")
 instructions = f"""
@@ -66,7 +69,7 @@ def format_safety_message(safety: LlamaGuardOutput) -> AIMessage:
 
 
 async def acall_model(state: AgentState, config: RunnableConfig) -> AgentState:
-    m = models[config["configurable"].get("model", "gpt-4o-mini")]
+    m = get_model(config["configurable"].get("model", settings.DEFAULT_MODEL))
     model_runnable = wrap_model(m)
     response = await model_runnable.ainvoke(state, config)
 
@@ -76,7 +79,7 @@ async def acall_model(state: AgentState, config: RunnableConfig) -> AgentState:
     if safety_output.safety_assessment == SafetyAssessment.UNSAFE:
         return {"messages": [format_safety_message(safety_output)], "safety": safety_output}
 
-    if state["is_last_step"] and response.tool_calls:
+    if state["remaining_steps"] < 2 and response.tool_calls:
         return {
             "messages": [
                 AIMessage(
@@ -142,6 +145,4 @@ def pending_tool_calls(state: AgentState) -> Literal["tools", "done"]:
 
 agent.add_conditional_edges("model", pending_tool_calls, {"tools": "tools", "done": END})
 
-research_assistant = agent.compile(
-    checkpointer=MemorySaver(),
-)
+research_assistant = agent.compile(checkpointer=MemorySaver())

@@ -1,7 +1,40 @@
-from typing import Any, Literal
+from typing import Any, Literal, NotRequired
 
-from pydantic import BaseModel, Field
-from typing_extensions import NotRequired, TypedDict
+from pydantic import BaseModel, Field, SerializeAsAny
+from typing_extensions import TypedDict
+
+from schema.models import AllModelEnum, AnthropicModelName, OpenAIModelName
+
+
+class AgentInfo(BaseModel):
+    """Info about an available agent."""
+
+    key: str = Field(
+        description="Agent key.",
+        examples=["research-assistant"],
+    )
+    description: str = Field(
+        description="Description of the agent.",
+        examples=["A research assistant for generating research papers."],
+    )
+
+
+class ServiceMetadata(BaseModel):
+    """Metadata about the service including available agents and models."""
+
+    agents: list[AgentInfo] = Field(
+        description="List of available agents.",
+    )
+    models: list[AllModelEnum] = Field(
+        description="List of available LLMs.",
+    )
+    default_agent: str = Field(
+        description="Default agent used when none is specified.",
+        examples=["research-assistant"],
+    )
+    default_model: AllModelEnum = Field(
+        description="Default model used when none is specified.",
+    )
 
 
 class UserInput(BaseModel):
@@ -11,10 +44,11 @@ class UserInput(BaseModel):
         description="User input to the agent.",
         examples=["What is the weather in Tokyo?"],
     )
-    model: str = Field(
+    model: SerializeAsAny[AllModelEnum] | None = Field(
+        title="Model",
         description="LLM Model to use for the agent.",
-        default="gpt-4o-mini",
-        examples=["gpt-4o-mini", "llama-3.1-70b"],
+        default=OpenAIModelName.GPT_4O_MINI,
+        examples=[OpenAIModelName.GPT_4O_MINI, AnthropicModelName.HAIKU_35],
     )
     thread_id: str | None = Field(
         description="Thread ID to persist and continue a multi-turn conversation.",
